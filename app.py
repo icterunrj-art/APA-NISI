@@ -94,12 +94,29 @@ def serve_api(method,path,query,data,token):
     if isinstance(edit,str):editing=c.execute('SELECT * FROM edit_sessions WHERE token_hash=? AND staff_id=? AND work_date=? AND closed=0 AND expires_at>?',(tokenhash(edit),sid,d,now())).fetchone()
     if edit and not editing:raise Error('修正受付は終了しました。管理者に依頼してください',403)
     existing=dump(c.execute('SELECT room,category FROM records WHERE work_date=? AND staff_id=?',(d,sid)))
-    if existing and not editing:raise Error('既に登録済みです。管理者に修正を依頼してください',409)
     conflict=c.execute('SELECT room FROM records WHERE work_date=? AND staff_id<>? AND room IN (%s)'%(','.join('?'*len(rooms)) if rooms else 'NULL'),[d,sid,*rooms]).fetchone()
     if conflict:raise Error(f'{conflict["room"]}号室は他のスタッフが登録済みです',409)
-    if editing:c.execute('DELETE FROM records WHERE work_date=? AND staff_id=?',(d,sid))
+    
     stamp=now()
-    for x in items:c.execute('INSERT INTO records(work_date,room,staff_id,category,created_at,updated_at) VALUES(?,?,?,?,?,?)',(d,x['room'],sid,x['category'],stamp,stamp))
+    if editing:
+     before_rooms={r['room'] for r in existing}
+     submitted_rooms=set(rooms)
+     removed_rooms=before_rooms-submitted_rooms
+     for room in removed_rooms:
+      c.execute('DELETE FROM records WHERE work_date=? AND staff_id=? AND room=?',(d,sid,room))
+     for x in items:
+      c.execute('''INSERT INTO records(work_date,room,staff_id,category,created_at,updated_at)
+       VALUES(?,?,?,?,?,?)
+       ON CONFLICT(work_date,room) DO UPDATE SET
+       category=excluded.category,updated_at=excluded.updated_at''',
+       (d,x['room'],sid,x['category'],stamp,stamp))
+    else:
+     already_owned={r['room'] for r in existing}
+     if any(room in already_owned for room in rooms):
+      raise Error('自分が登録済みの部屋が含まれています',409)
+     for x in items:
+      c.execute('INSERT INTO records(work_date,room,staff_id,category,created_at,updated_at) VALUES(?,?,?,?,?,?)',
+       (d,x['room'],sid,x['category'],stamp,stamp))
     if not editing:
      edit=secrets.token_urlsafe(32);c.execute('INSERT INTO edit_sessions VALUES(?,?,?,?,0)',(tokenhash(edit),sid,d,expiry(2)))
     log(c,f'staff:{sid}','submit' if not editing else 'immediate_edit',{'date':d,'before':existing,'after':items})
