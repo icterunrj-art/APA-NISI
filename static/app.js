@@ -31,3 +31,250 @@ async function staffAdmin(){mode='staffAdmin';try{allStaff=(await api('/api/admi
 async function roomsAdmin(){try{let r=await api('/api/admin/rooms');app.innerHTML=navigation('rooms')+`<div class="panel"><h2>部屋マスター（${r.rooms.length}室）</h2><div class="tablewrap"><table><tr><th>部屋番号</th><th>タイプ</th><th>有効</th><th>操作</th></tr>${r.rooms.map(x=>`<tr><td>${x.number}</td><td><select id="type-${x.number}">${Object.entries(TYPES).map(([k,v])=>`<option value="${k}" ${k===x.type?'selected':''}>${v}</option>`).join('')}</select></td><td><input type="checkbox" id="roomActive-${x.number}" ${x.active?'checked':''}></td><td><button data-save-room="${x.number}">保存</button></td></tr>`).join('')}</table></div></div>`;bindNav();document.querySelectorAll('[data-save-room]').forEach(b=>b.onclick=async()=>{let n=+b.dataset.saveRoom;try{await api('/api/admin/rooms','POST',{number:n,type:$('#type-'+n).value,active:$('#roomActive-'+n).checked});toast('更新しました');await refresh()}catch(e){err(e)}})}catch(e){err(e)}}
 async function auditView(){try{let a=(await api('/api/admin/audit')).audit;app.innerHTML=navigation('audit')+`<div class="panel"><h2>操作履歴（直近200件）</h2><div class="tablewrap"><table><tr><th>日時</th><th>操作担当</th><th>内容</th><th>詳細</th></tr>${a.map(x=>`<tr><td>${esc(x.at)}</td><td>${esc(x.actor)}</td><td>${esc(x.action)}</td><td><details><summary>表示</summary><pre>${esc(x.details)}</pre></details></td></tr>`).join('')}</table></div></div>`;bindNav()}catch(e){err(e)}}
 $('#home').onclick=home;refresh().then(home).catch(e=>app.innerHTML=`<div class="panel error">サーバーに接続できません。${esc(e.message)}</div>`);
+
+/* Staff registration fix: preserves CHECKER and ADMIN features */
+let editLoaded = false;
+
+addMoreRooms = async function () {
+  await closeEdit();
+  draft = {};
+  editLoaded = false;
+  selectedRoom = null;
+  await staffView();
+};
+
+staffStart = function () {
+  mode = 'staff';
+  staffId = config.staff.some(s => String(s.id) === String(staffId))
+    ? staffId : String(config.staff[0]?.id || '');
+  workDate = config.today;
+  draft = {};
+  editToken = '';
+  editLoaded = false;
+  floor = 2;
+  staffView();
+};
+
+staffView = async function () {
+  mode = 'staff';
+  let status;
+  try {
+    status = await api('/api/status?date=' + encodeURIComponent(workDate));
+  } catch (e) {
+    return err(e);
+  }
+
+  const used = new Map(status.records.map(r => [r.room, r]));
+  const mine = status.records.filter(
+    r => String(r.staff_id) === String(staffId)
+  );
+
+  if (editToken && !editLoaded) {
+    draft = {};
+    mine.forEach(r => draft[r.room] = r.category);
+    editLoaded = true;
+  }
+
+  const editing = !!editToken;
+  const roomType = n => TYPES[config.rooms.find(r => r.number === +n)?.type] || '';
+
+  app.innerHTML = `
+    <div class="panel">
+      <h2>スタッフ清掃入力</h2>
+      <div class="row">
+        ${field('スタッフ名', `<select id="staff">
+          ${config.staff.map(s => `<option value="${s.id}"
+          ${String(s.id) === String(staffId) ? 'selected' : ''}>
+          ${esc(s.name)}</option>`).join('')}
+        </select>`)}
+        ${field('清掃日', `<input type="date" id="workDate"
+          max="${config.today}" value="${workDate}">`)}
+      </div>
+      <p class="muted">${editing
+        ? '修正モード：保存済みの自分の部屋を訂正できます。'
+        : '追加登録モード：未登録の部屋を選んでください。'}
+        部屋タイプは自動設定です。
+      </p>
+      <div class="floors">
+        ${[2,3,4,5,6].map(f => `<button
+          class="${f === floor ? 'active' : 'secondary'}"
+          data-floor="${f}">${f}F</button>`).join('')}
+      </div>
+      <div class="grid">
+        ${config.rooms.filter(r => Math.floor(r.number / 100) === floor)
+          .map(r => {
+            const busy = used.get(r.number);
+            const own = busy && String(busy.staff_id) === String(staffId);
+            const chosen = draft[r.number];
+            const disabled = (busy && !own) || (own && !editing);
+            return `<button class="room ${chosen ? 'selected' : ''}
+              ${busy && !own ? 'busy' : ''} ${own ? 'own' : ''}"
+              data-room="${r.number}" ${disabled ? 'disabled' : ''}>
+              ${r.number}<small>${roomType(r.number)}
+              ${busy ? '<br>' + (own ? '自分が登録済' : '登録済') : ''}
+              ${chosen ? '<br>' + esc(chosen) : ''}
+              </small></button>`;
+          }).join('')}
+      </div>
+    </div>
+    <div class="panel" id="editor">
+      <h3>清掃区分の選択</h3>
+      <p class="muted">部屋番号をタップしてください。</p>
+    </div>
+    <div class="panel">
+      <div class="row space">
+        <h3>今回の入力 <span class="pill">${Object.keys(draft).length}室</span></h3>
+        <button class="secondary compact" id="clearDraft">入力をクリア</button>
+      </div>
+      <div class="tablewrap"><table>
+        <thead><tr><th>部屋</th><th>タイプ</th><th>区分</th><th>操作</th></tr></thead>
+        <tbody>
+        ${Object.keys(draft).sort((a,b) => +a - +b).map(n => `
+          <tr><td>${n}</td><td>${roomType(n)}</td>
+          <td>${draft[n]}</td>
+          <td><button class="danger" data-remove="${n}">削除</button></td></tr>
+        `).join('') || '<tr><td colspan="4">まだ入力されていません</td></tr>'}
+        </tbody>
+      </table></div>
+      <hr>
+      <button class="large" id="submit"
+        ${!editing && !Object.keys(draft).length ? 'disabled' : ''}>
+        入力内容を確認して完了
+      </button>
+    </div>`;
+
+  $('#staff').onchange = async e => {
+    await closeEdit();
+    staffId = e.target.value;
+    draft = {};
+    editLoaded = false;
+    staffView();
+  };
+  $('#workDate').onchange = async e => {
+    await closeEdit();
+    workDate = e.target.value;
+    draft = {};
+    editLoaded = false;
+    staffView();
+  };
+  document.querySelectorAll('[data-floor]').forEach(b => {
+    b.onclick = () => { floor = +b.dataset.floor; staffView(); };
+  });
+  document.querySelectorAll('[data-room]').forEach(b => {
+    b.onclick = () => {
+      selectedRoom = +b.dataset.room;
+      $('#editor').innerHTML = `
+        <h3>${selectedRoom}号室
+        <span class="pill">${roomType(selectedRoom)}</span></h3>
+        <p class="muted">清掃区分を選択</p>
+        <div class="choice">${CATS.map(cat => `
+          <button data-cat="${cat}"
+          class="${draft[selectedRoom] === cat ? 'active' : ''}">
+          ${cat}</button>`).join('')}</div>`;
+      document.querySelectorAll('[data-cat]').forEach(x => {
+        x.onclick = () => {
+          draft[selectedRoom] = x.dataset.cat;
+          staffView();
+        };
+      });
+    };
+  });
+  document.querySelectorAll('[data-remove]').forEach(b => {
+    b.onclick = () => { delete draft[b.dataset.remove]; staffView(); };
+  });
+  $('#clearDraft').onclick = () => {
+    if (confirm('今回の入力をクリアしますか？')) {
+      draft = {};
+      staffView();
+    }
+  };
+  $('#submit').onclick = confirmSubmit;
+};
+
+confirmSubmit = function () {
+  const items = Object.entries(draft)
+    .map(([room, category]) => ({room: +room, category}))
+    .sort((a,b) => a.room - b.room);
+
+  app.innerHTML = `<div class="panel">
+    <h2>登録内容の確認</h2>
+    <p>スタッフ：<b>${esc(config.staff.find(
+      s => String(s.id) === String(staffId))?.name)}</b>
+      日付：<b>${workDate}</b></p>
+    <h3>合計 ${items.length}室</h3>
+    <div class="tablewrap"><table>
+      <tr><th>部屋</th><th>タイプ</th><th>清掃区分</th></tr>
+      ${items.map(x => `<tr><td>${x.room}</td>
+        <td>${TYPES[config.rooms.find(r => r.number === x.room)?.type]}</td>
+        <td>${x.category}</td></tr>`).join('')}
+    </table></div>
+    <hr><div class="row">
+      <button class="secondary" id="back">入力に戻る</button>
+      <button id="save">完了・保存する</button>
+    </div>
+  </div>`;
+
+  $('#back').onclick = staffView;
+  $('#save').onclick = async () => {
+    const button = $('#save');
+    button.disabled = true;
+    try {
+      const r = await api('/api/submit', 'POST', {
+        date: workDate,
+        staff_id: +staffId,
+        items,
+        edit_token: editToken || undefined
+      });
+      editToken = r.edit_token;
+      editLoaded = false;
+      draft = {};
+      const latest = await api('/api/my-records?date=' +
+        encodeURIComponent(workDate) + '&staff_id=' +
+        encodeURIComponent(staffId));
+      resultView(latest.records);
+    } catch (e) {
+      err(e);
+      staffView();
+    }
+  };
+};
+
+resultView = function (items) {
+  mode = 'result';
+  const typeCounts = {}, catCounts = {};
+  items.forEach(x => {
+    const t = config.rooms.find(r => r.number === x.room)?.type;
+    if (t) typeCounts[t] = (typeCounts[t] || 0) + 1;
+    catCounts[x.category] = (catCounts[x.category] || 0) + 1;
+  });
+
+  app.innerHTML = `<div class="panel">
+    <h2 class="success">✓ 清掃報告を保存しました</h2>
+    <p>${esc(config.staff.find(
+      s => String(s.id) === String(staffId))?.name)}　${workDate}</p>
+    <div class="summary">
+      <div class="stat"><b>${items.length}</b><span>合計清掃室数</span></div>
+      ${CATS.map(c => `<div class="stat"><b>${catCounts[c] || 0}</b>
+        <span>${c}</span></div>`).join('')}
+      ${Object.entries(TYPES).map(([k,v]) => `
+        <div class="stat"><b>${typeCounts[k] || 0}</b>
+        <span>${v}</span></div>`).join('')}
+    </div>
+    <hr>
+    <p class="muted">追加登録では保存済みの記録は消えません。
+      登録直後の修正は「すぐに修正する」を選んでください。</p>
+    <div class="row">
+      <button id="edit">すぐに修正する</button>
+      <button class="secondary" id="addMore">別の部屋を追加</button>
+      <button class="secondary" id="finish">終了してホームへ</button>
+    </div>
+  </div>`;
+
+  $('#edit').onclick = () => {
+    draft = {};
+    editLoaded = false;
+    staffView();
+  };
+  $('#addMore').onclick = addMoreRooms;
+  $('#finish').onclick = home;
+};
