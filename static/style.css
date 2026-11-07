@@ -38,3 +38,8 @@
 .room:disabled {
   color: #64748b !important;
 }
+
+/* Keep room numbers legible even for unavailable rooms. */
+button.room:disabled { opacity: 1; background: #edf1f5; color: #34465e !important; border-color: #cbd5e1; }
+button.room:disabled small { color: #526278 !important; }
+button.room.own:disabled { background: #e8faf3; border-color: #79c5b1; }
