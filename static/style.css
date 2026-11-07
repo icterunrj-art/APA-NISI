@@ -23,3 +23,18 @@
 .room:disabled {
   color: #64748b !important;
 }
+
+.room {
+  color: #14243b !important;
+  font-size: 24px !important;
+  font-weight: 800 !important;
+}
+.room small {
+  display: block;
+  color: #475569 !important;
+  font-size: 12px !important;
+}
+.room.busy,
+.room:disabled {
+  color: #64748b !important;
+}
